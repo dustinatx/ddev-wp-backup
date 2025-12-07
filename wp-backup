@@ -1,0 +1,740 @@
+#!/bin/bash
+set -euo pipefail
+
+# ==========================================================
+# wp-backup: WordPress Backup/Restore System for DDEV
+# Requires: jq (host-side)
+# Optional: pv (for progress bars on large tar operations)
+#
+# Supports:
+#   ddev wp-backup [scope] [--name NAME]
+#   ddev wp-backup list [scope]
+#   ddev wp-backup restore [scope] [--name NAME]
+#   ddev wp-backup cleanup [scope|name]
+#
+# Default scope = site
+# ==========================================================
+
+# ----------------------------------------------------------
+# Colors
+# ----------------------------------------------------------
+RED="\033[31m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+# ----------------------------------------------------------
+# Paths
+# ----------------------------------------------------------
+PROJECT_ROOT="$(pwd)"
+BACKUP_DIR="${PROJECT_ROOT}/.ddev/backups"
+INDEX_FILE="${BACKUP_DIR}/index.json"
+
+mkdir -p "${BACKUP_DIR}"
+
+# ----------------------------------------------------------
+# Ensure jq is available
+# ----------------------------------------------------------
+if ! command -v jq >/dev/null 2>&1; then
+    echo -e "${RED}Error:${RESET} jq is required but not installed."
+    echo "Install it with: sudo apt install jq"
+    exit 1
+fi
+
+# ----------------------------------------------------------
+# Check for pv (optional, for progress bars)
+# ----------------------------------------------------------
+HAS_PV=false
+if command -v pv >/dev/null 2>&1; then
+    HAS_PV=true
+fi
+
+# ----------------------------------------------------------
+# Utility: sanitize backup name
+# ----------------------------------------------------------
+sanitize_name() {
+    local name="$1"
+    name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+    name=$(echo "$name" | sed 's/[^a-z0-9_ ]//g')
+    name=$(echo "$name" | sed 's/[ ]\+/_/g')
+    name=$(echo "$name" | sed 's/__\+/_/g')
+    name=$(echo "$name" | sed 's/^_//; s/_$//')
+    echo "$name"
+}
+
+# ----------------------------------------------------------
+# Utility: format file size to human-readable
+# ----------------------------------------------------------
+format_size() {
+    local bytes="$1"
+    local size=""
+
+    if [ "$bytes" -lt 1024 ]; then
+        size="${bytes}B"
+    elif [ "$bytes" -lt 1048576 ]; then
+        size="$((bytes / 1024))KB"
+    elif [ "$bytes" -lt 1073741824 ]; then
+        size="$((bytes / 1048576))MB"
+    else
+        size="$((bytes / 1073741824))GB"
+    fi
+
+    echo "$size"
+}
+
+# ----------------------------------------------------------
+# Initialize metadata index
+# ----------------------------------------------------------
+init_index() {
+    if [ ! -f "${INDEX_FILE}" ]; then
+        echo "[]" > "${INDEX_FILE}"
+    fi
+}
+
+init_index
+
+# ----------------------------------------------------------
+# Validate scope
+# ----------------------------------------------------------
+valid_scopes=("plugins" "themes" "wp-content" "uploads" "site" "full")
+
+is_valid_scope() {
+    local scope="$1"
+    for s in "${valid_scopes[@]}"; do
+        if [[ "$s" == "$scope" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ----------------------------------------------------------
+# Show help
+# ----------------------------------------------------------
+show_help() {
+cat <<EOF
+${BOLD}wp-backup: WordPress Backup/Restore for DDEV${RESET}
+
+Requirements:
+  - jq (required): sudo apt install jq
+  - pv (optional, for progress bars): sudo apt install pv
+
+Usage:
+  ddev wp-backup [scope] [-n|--name NAME]
+  ddev wp-backup list [scope]
+  ddev wp-backup restore [scope] [-n|--name NAME] [-i|--id ID]
+  ddev wp-backup cleanup [scope|name]
+  ddev wp-backup rebuild
+
+Scopes:
+  plugins      Backup DB + wp-content/plugins
+  themes       Backup DB + wp-content/themes
+  wp-content   Backup DB + wp-content (excluding uploads)
+  uploads      Backup DB + wp-content/uploads
+  site         Backup DB + entire site (excluding uploads)
+  full         Backup DB + entire site (including uploads)
+
+If no scope is provided, default = site.
+
+Restore Priority:
+  When restoring, the search order is: ID > (scope + name) > name > scope > latest
+  - Restoring by name always uses the most recent backup with that name
+  - Multiple backups can share the same name (different timestamps)
+  - Use --id to restore a specific backup when duplicates exist
+
+Examples:
+  # Create backups
+  ddev wp-backup
+  ddev wp-backup plugins -n before_update
+  ddev wp-backup plugins --name before_update
+
+  # List backups
+  ddev wp-backup list
+  ddev wp-backup list plugins
+
+  # Restore backups
+  ddev wp-backup restore                           # Restore latest backup (any scope)
+  ddev wp-backup restore plugins                   # Restore latest plugins backup
+  ddev wp-backup restore -n before_update          # Restore latest backup named 'before_update'
+  ddev wp-backup restore plugins -n before_update  # Restore latest plugins backup named 'before_update'
+  ddev wp-backup restore -i plugins-20251207-091855-before_update  # Restore specific backup by ID
+
+  # Cleanup
+  ddev wp-backup cleanup
+  ddev wp-backup cleanup plugins
+  ddev wp-backup cleanup before_update
+
+  # Rebuild index
+  ddev wp-backup rebuild
+
+EOF
+}
+
+# ----------------------------------------------------------
+# Determine what files to include based on scope
+# ----------------------------------------------------------
+build_tar_command() {
+    local scope="$1"
+    local tar_cmd="tar -czf"
+
+    case "$scope" in
+        plugins)
+            INCLUDE=("wp-content/plugins")
+            EXCLUDE=()
+            ;;
+        themes)
+            INCLUDE=("wp-content/themes")
+            EXCLUDE=()
+            ;;
+        wp-content)
+            INCLUDE=("wp-content")
+            EXCLUDE=("wp-content/uploads" "wp-content/uploads/*")
+            ;;
+        uploads)
+            INCLUDE=("wp-content/uploads")
+            EXCLUDE=()
+            ;;
+        site)
+            INCLUDE=(".")
+            EXCLUDE=(".ddev" ".ddev/*" "wp-content/uploads" "wp-content/uploads/*")
+            ;;
+        full)
+            INCLUDE=(".")
+            EXCLUDE=(".ddev" ".ddev/*")
+            ;;
+        *)
+            echo -e "${RED}Invalid scope:${RESET} $scope"
+            exit 1
+            ;;
+    esac
+}
+
+# ----------------------------------------------------------
+# Verify backup files integrity
+# ----------------------------------------------------------
+verify_backup_files() {
+    local files_tar="$1"
+    local db_dump="$2"
+    local all_ok=true
+
+    # Test tar.gz integrity
+    if ! gzip -t "${BACKUP_DIR}/${files_tar}" 2>/dev/null; then
+        echo -e "${RED}✗ Filesystem backup failed gzip integrity test${RESET}"
+        all_ok=false
+    elif ! tar -tzf "${BACKUP_DIR}/${files_tar}" >/dev/null 2>&1; then
+        echo -e "${RED}✗ Filesystem backup failed tar integrity test${RESET}"
+        all_ok=false
+    fi
+
+    # Test db.sql.gz integrity
+    if ! gzip -t "${BACKUP_DIR}/${db_dump}" 2>/dev/null; then
+        echo -e "${RED}✗ Database backup failed gzip integrity test${RESET}"
+        all_ok=false
+    fi
+
+    # Check file sizes
+    if [ ! -s "${BACKUP_DIR}/${files_tar}" ]; then
+        echo -e "${RED}✗ Filesystem backup is empty${RESET}"
+        all_ok=false
+    fi
+
+    if [ ! -s "${BACKUP_DIR}/${db_dump}" ]; then
+        echo -e "${RED}✗ Database backup is empty${RESET}"
+        all_ok=false
+    fi
+
+    if [ "$all_ok" = false ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# ----------------------------------------------------------
+# Create backup
+# ----------------------------------------------------------
+create_backup() {
+    local scope="$1"
+    local name="$2"
+
+    # Use placeholder for empty names to avoid field parsing issues
+    [ -z "$name" ] && name="-"
+
+    if ! is_valid_scope "$scope"; then
+        echo -e "${RED}Invalid scope:${RESET} $scope"
+        exit 1
+    fi
+
+    # Check for existing backups with same scope and name
+    local existing_count
+    existing_count=$(jq --arg scope "$scope" --arg name "$name" \
+        '[.[] | select(.scope == $scope and .name == $name)] | length' "${INDEX_FILE}")
+
+    if [ "$existing_count" -gt 0 ]; then
+        local display_name="$name"
+        [ "$name" = "-" ] && display_name="(unnamed)"
+        echo -e "${YELLOW}Note:${RESET} ${existing_count} backup(s) named '${display_name}' already exist for scope '${scope}'."
+        echo -e "${YELLOW}      The new backup will become the default when restoring by this name.${RESET}"
+        echo ""
+    fi
+
+    local ts
+    ts=$(date +"%Y%m%d-%H%M%S")
+
+    local id="${scope}-${ts}-${name}"
+    local files_tar="${id}-files.tar.gz"
+    local db_dump="${id}-db.sql.gz"
+
+    echo -e "${BOLD}Creating backup:${RESET} $id"
+
+    build_tar_command "$scope"
+
+    # Build tar excludes
+    TAR_EXCLUDES=()
+    for ex in "${EXCLUDE[@]}"; do
+        TAR_EXCLUDES+=(--exclude="${ex}")
+    done
+
+    # Tar includes
+    TAR_INCLUDES=()
+    for inc in "${INCLUDE[@]}"; do
+        TAR_INCLUDES+=("${inc}")
+    done
+
+    # Create FS backup
+    if [ "$HAS_PV" = true ]; then
+        echo -e "${GREEN}✔ Filesystem backup (with progress)...${RESET}"
+        tar -cf - "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}" | pv | gzip > "${BACKUP_DIR}/${files_tar}"
+    else
+        echo -e "${GREEN}✔ Filesystem backup...${RESET}"
+        tar -czf "${BACKUP_DIR}/${files_tar}" "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}"
+    fi
+
+    # Create DB backup
+    echo -e "${GREEN}✔ Database backup...${RESET}"
+    ddev export-db --gzip -f "${BACKUP_DIR}/${db_dump}"
+
+    # Verify backup integrity
+    echo -e "${GREEN}✔ Verifying backup integrity...${RESET}"
+    if ! verify_backup_files "$files_tar" "$db_dump"; then
+        echo -e "${RED}✗ Backup verification failed. Cleaning up...${RESET}"
+        rm -f "${BACKUP_DIR}/${files_tar}" "${BACKUP_DIR}/${db_dump}"
+        exit 1
+    fi
+
+    # Add metadata entry
+    jq --arg id "$id" \
+       --arg scope "$scope" \
+       --arg name "$name" \
+       --arg ts $(date -Is) \
+       --arg files "$files_tar" \
+       --arg db "$db_dump" \
+       '. += [{
+            id: $id,
+            scope: $scope,
+            name: $name,
+            timestamp: $ts,
+            files: $files,
+            db: $db
+        }]' \
+       "${INDEX_FILE}" > "${INDEX_FILE}.tmp"
+
+    mv "${INDEX_FILE}.tmp" "${INDEX_FILE}"
+
+    echo -e "${GREEN}✔ Backup created:${RESET} $id"
+}
+
+# ----------------------------------------------------------
+# List backups
+# ----------------------------------------------------------
+list_backups() {
+    local scope="${1:-}"
+
+    local all_backups
+    all_backups=$(jq '[.[]]' "${INDEX_FILE}")
+
+    # Check if index is empty
+    if [ "$(echo "$all_backups" | jq 'length')" -eq 0 ]; then
+        echo "No backups found."
+        return
+    fi
+
+    # Track stale entries and build valid output
+    local ids_to_remove=()
+    local valid_output=""
+    local valid_count=0
+
+    while IFS=$'\t' read -r id_val scope_val name_val ts_val files_val db_val; do
+        # Check if both backup files exist
+        if [ -f "${BACKUP_DIR}/${files_val}" ] && [ -f "${BACKUP_DIR}/${db_val}" ]; then
+            # Only include if scope filter matches (or no filter)
+            if [ -z "$scope" ] || [ "$scope_val" == "$scope" ]; then
+                # Calculate total size
+                local files_size=$(stat -c%s "${BACKUP_DIR}/${files_val}" 2>/dev/null || echo 0)
+                local db_size=$(stat -c%s "${BACKUP_DIR}/${db_val}" 2>/dev/null || echo 0)
+                local total_size=$((files_size + db_size))
+                local size_formatted=$(format_size "$total_size")
+
+                ts_formatted=$(echo "$ts_val" | sed 's/\.[0-9]*//; s/T/ /; s/[+-][0-9:]*$//')
+                valid_output="${valid_output}$(printf "${GREEN}%-12s${RESET}  ${YELLOW}%-30s${RESET}  %-8s  %-20s" "$scope_val" "$name_val" "$size_formatted" "$ts_formatted")"$'\n'
+                ((valid_count++)) || true
+            fi
+        else
+            ids_to_remove+=("$id_val")
+        fi
+    done < <(echo "$all_backups" | jq -r '.[] | "\(.id)\t\(.scope)\t\(.name)\t\(.timestamp)\t\(.files)\t\(.db)"')
+
+    # Auto-cleanup stale entries from index
+    if [ "${#ids_to_remove[@]}" -gt 0 ]; then
+        local filter='.'
+        for id in "${ids_to_remove[@]}"; do
+            filter="$filter | map(select(.id != \"$id\"))"
+        done
+        jq "$filter" "${INDEX_FILE}" > "${INDEX_FILE}.tmp"
+        mv "${INDEX_FILE}.tmp" "${INDEX_FILE}"
+        echo -e "${YELLOW}⚠ Cleaned up ${#ids_to_remove[@]} stale index entries (missing files).${RESET}"
+    fi
+
+    # Show results
+    if [ "$valid_count" -eq 0 ]; then
+        echo "No backups found."
+        return
+    fi
+
+    # Print header and backups
+    echo "Available Backups:"
+    echo ""
+    printf "${BOLD}%-12s  %-30s  %-8s  %-20s${RESET}\n" "SCOPE" "NAME" "SIZE" "CREATED"
+    printf "%s  %s  %s  %s\n" "────────────" "──────────────────────────────" "────────" "────────────────────"
+    printf "%s" "$valid_output"
+}
+
+# ----------------------------------------------------------
+# Find latest backup (optionally by scope)
+# ----------------------------------------------------------
+find_latest_backup() {
+    local scope="${1:-}"
+
+    if [ -n "$scope" ]; then
+        jq --arg scope "$scope" \
+           '[.[] | select(.scope == $scope)] | sort_by(.timestamp) | last' \
+           "${INDEX_FILE}"
+    else
+        jq '[.[]] | sort_by(.timestamp) | last' "${INDEX_FILE}"
+    fi
+}
+
+# ----------------------------------------------------------
+# Restore a backup
+# ----------------------------------------------------------
+restore_backup() {
+    local scope="${1:-}"
+    local name="${2:-}"
+    local id="${3:-}"
+
+    local backup_json
+
+    # Priority: ID > (scope + name) > name > scope > latest
+    if [ -n "$id" ]; then
+        backup_json=$(jq --arg id "$id" '.[] | select(.id == $id)' "${INDEX_FILE}")
+    elif [ -n "$name" ] && [ -n "$scope" ]; then
+        backup_json=$(jq --arg name "$name" --arg scope "$scope" \
+            '[.[] | select(.name == $name and .scope == $scope)] | sort_by(.timestamp) | last' "${INDEX_FILE}")
+    elif [ -n "$name" ]; then
+        backup_json=$(jq --arg name "$name" \
+            '[.[] | select(.name == $name)] | sort_by(.timestamp) | last' "${INDEX_FILE}")
+    elif [ -n "$scope" ]; then
+        backup_json=$(find_latest_backup "$scope")
+    else
+        backup_json=$(find_latest_backup)
+    fi
+
+    if [ "$backup_json" = "null" ]; then
+        echo -e "${RED}No matching backup found.${RESET}"
+        exit 1
+    fi
+
+    local id files db backup_scope
+    id=$(echo "$backup_json" | jq -r '.id')
+    files=$(echo "$backup_json" | jq -r '.files')
+    db=$(echo "$backup_json" | jq -r '.db')
+    backup_scope=$(echo "$backup_json" | jq -r '.scope')
+
+    echo -e "${YELLOW}Restoring backup:${RESET} $id"
+
+    # Scope-aware deletion and warning
+    case "$backup_scope" in
+        plugins)
+            echo -e "${YELLOW}This will delete wp-content/plugins${RESET}"
+            read -rp "Continue? [y/N] " yn
+            [[ "$yn" == "y" ]] || exit 0
+            rm -rf "${PROJECT_ROOT}/wp-content/plugins"
+            ;;
+        themes)
+            echo -e "${YELLOW}This will delete wp-content/themes${RESET}"
+            read -rp "Continue? [y/N] " yn
+            [[ "$yn" == "y" ]] || exit 0
+            rm -rf "${PROJECT_ROOT}/wp-content/themes"
+            ;;
+        wp-content)
+            echo -e "${YELLOW}This will delete wp-content (excluding uploads)${RESET}"
+            read -rp "Continue? [y/N] " yn
+            [[ "$yn" == "y" ]] || exit 0
+            # Save uploads if it exists
+            if [ -d "${PROJECT_ROOT}/wp-content/uploads" ]; then
+                mv "${PROJECT_ROOT}/wp-content/uploads" "${PROJECT_ROOT}/uploads-temp"
+            fi
+            rm -rf "${PROJECT_ROOT}/wp-content"
+            # Restore uploads
+            if [ -d "${PROJECT_ROOT}/uploads-temp" ]; then
+                mkdir -p "${PROJECT_ROOT}/wp-content"
+                mv "${PROJECT_ROOT}/uploads-temp" "${PROJECT_ROOT}/wp-content/uploads"
+            fi
+            ;;
+        uploads)
+            echo -e "${YELLOW}This will delete wp-content/uploads${RESET}"
+            read -rp "Continue? [y/N] " yn
+            [[ "$yn" == "y" ]] || exit 0
+            rm -rf "${PROJECT_ROOT}/wp-content/uploads"
+            ;;
+        site|full)
+            echo -e "${YELLOW}This will delete ALL files except .ddev${RESET}"
+            read -rp "Continue? [y/N] " yn
+            [[ "$yn" == "y" ]] || exit 0
+            # Delete project files except .ddev
+            shopt -s dotglob nullglob
+            for path in "${PROJECT_ROOT}"/*; do
+                [ -e "$path" ] || continue
+                if [[ "$(basename "$path")" == ".ddev" ]]; then
+                    continue
+                fi
+                rm -rf "$path"
+            done
+            ;;
+    esac
+
+    # Extract files
+    if [ "$HAS_PV" = true ]; then
+        echo -e "${GREEN}✔ Extracting files (with progress)...${RESET}"
+        pv "${BACKUP_DIR}/${files}" | tar -xzf - -C "${PROJECT_ROOT}"
+    else
+        echo -e "${GREEN}✔ Extracting files...${RESET}"
+        tar -xzf "${BACKUP_DIR}/${files}" -C "${PROJECT_ROOT}"
+    fi
+
+    # Import DB
+    echo -e "${GREEN}✔ Importing database...${RESET}"
+    ddev import-db --file="${BACKUP_DIR}/${db}"
+
+    echo -e "${GREEN}✔ Restore complete:${RESET} $id"
+}
+
+# ----------------------------------------------------------
+# Rebuild index from existing backup files
+# ----------------------------------------------------------
+rebuild_index_from_files() {
+    echo -e "${YELLOW}Rebuilding index from backup files...${RESET}"
+
+    local new_index="[]"
+    local count=0
+
+    # Find all -files.tar.gz files
+    for files_path in "${BACKUP_DIR}"/*-files.tar.gz; do
+        [ -e "$files_path" ] || continue
+
+        local files_name=$(basename "$files_path")
+        local id="${files_name%-files.tar.gz}"
+        local db_name="${id}-db.sql.gz"
+        local db_path="${BACKUP_DIR}/${db_name}"
+
+        # Check if corresponding db file exists
+        if [ ! -f "$db_path" ]; then
+            echo -e "${YELLOW}⚠ Warning: Missing DB file for ${files_name}${RESET}"
+            continue
+        fi
+
+        # Parse ID format: {scope}-{YYYYMMDD}-{HHMMSS}-{name}
+        # Extract scope (one of the valid scopes)
+        local scope=""
+        for s in "${valid_scopes[@]}"; do
+            if [[ "$id" =~ ^${s}- ]]; then
+                scope="$s"
+                break
+            fi
+        done
+
+        if [ -z "$scope" ]; then
+            echo -e "${YELLOW}⚠ Warning: Could not determine scope for ${files_name}${RESET}"
+            continue
+        fi
+
+        # Remove scope- prefix
+        local rest="${id#${scope}-}"
+
+        # Extract timestamp: YYYYMMDD-HHMMSS (15 chars)
+        local date_part="${rest:0:8}"
+        local time_part="${rest:9:6}"
+
+        # Extract name (everything after YYYYMMDD-HHMMSS-)
+        local name="${rest:16}"
+        # Use placeholder for empty names to avoid field parsing issues
+        [ -z "$name" ] && name="-"
+
+        # Convert to ISO timestamp
+        local ts_iso=$(date -d "${date_part:0:4}-${date_part:4:2}-${date_part:6:2} ${time_part:0:2}:${time_part:2:2}:${time_part:4:2}" -Iseconds 2>/dev/null || echo "1970-01-01T00:00:00+00:00")
+
+        # Add to index
+        new_index=$(echo "$new_index" | jq --arg id "$id" \
+           --arg scope "$scope" \
+           --arg name "$name" \
+           --arg ts "$ts_iso" \
+           --arg files "$files_name" \
+           --arg db "$db_name" \
+           '. += [{
+                id: $id,
+                scope: $scope,
+                name: $name,
+                timestamp: $ts,
+                files: $files,
+                db: $db
+            }]')
+
+        ((count++)) || true
+    done
+
+    echo "$new_index" > "${INDEX_FILE}"
+
+    echo -e "${GREEN}✔ Rebuilt index with ${count} backup(s).${RESET}"
+}
+
+# ----------------------------------------------------------
+# Cleanup backups
+# ----------------------------------------------------------
+cleanup_backups() {
+    local target="${1:-}"
+
+    # Build warning message based on what's being deleted
+    if [ -z "$target" ]; then
+        echo -e "${YELLOW}⚠ WARNING:${RESET} This will delete ALL backups."
+    else
+        # Check if target is a valid scope
+        if is_valid_scope "$target"; then
+            echo -e "${YELLOW}⚠ WARNING:${RESET} This will delete all '${target}' backups."
+        else
+            echo -e "${YELLOW}⚠ WARNING:${RESET} This will delete backups named '${target}'."
+        fi
+    fi
+
+    read -rp "Proceed? [y/N] " yn
+    [[ "$yn" == "y" ]] || exit 0
+
+    if [ -z "$target" ]; then
+        rm -rf "${BACKUP_DIR}"/*
+        echo "[]" > "${INDEX_FILE}"
+        echo -e "${GREEN}✔ All backups deleted.${RESET}"
+        return
+    fi
+
+    # Scope or name?
+    local filtered
+    filtered=$(jq --arg t "$target" '[.[] | select(.scope == $t or .name == $t)]' "${INDEX_FILE}")
+
+    if [ "$filtered" = "[]" ]; then
+        echo -e "${RED}No backups matched:${RESET} $target"
+        exit 1
+    fi
+
+    for id in $(echo "$filtered" | jq -r '.[].id'); do
+        files=$(echo "$filtered" | jq -r --arg id "$id" '.[] | select(.id == $id) | .files')
+        db=$(echo "$filtered" | jq -r --arg id "$id" '.[] | select(.id == $id) | .db')
+
+        rm -f "${BACKUP_DIR}/${files}" "${BACKUP_DIR}/${db}"
+    done
+
+    jq --arg t "$target" '[.[] | select(.scope != $t and .name != $t)]' \
+       "${INDEX_FILE}" > "${INDEX_FILE}.tmp"
+
+    mv "${INDEX_FILE}.tmp" "${INDEX_FILE}"
+
+    echo -e "${GREEN}✔ Cleanup complete.${RESET}"
+}
+
+# ----------------------------------------------------------
+# Parse arguments
+# ----------------------------------------------------------
+
+COMMAND="${1:-}"
+shift || true
+
+case "$COMMAND" in
+    "" )
+        create_backup "site" "$(sanitize_name "")"
+        ;;
+    -h|--help )
+        show_help
+        ;;
+    list )
+        SCOPE="${1:-}"
+        list_backups "$SCOPE"
+        ;;
+    restore )
+        RESTORE_SCOPE=""
+        RESTORE_NAME=""
+        RESTORE_ID=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -n|--name)
+                    shift
+                    name_parts=""
+                    while [[ $# -gt 0 && ! "$1" =~ ^-- && ! "$1" =~ ^-[a-z] ]]; do
+                        name_parts="$name_parts $1"
+                        shift
+                    done
+                    RESTORE_NAME="$(sanitize_name "$name_parts")"
+                    ;;
+                -i|--id)
+                    shift
+                    RESTORE_ID="$1"
+                    shift
+                    ;;
+                *)
+                    RESTORE_SCOPE="$1"
+                    shift
+                    ;;
+            esac
+        done
+        restore_backup "$RESTORE_SCOPE" "$RESTORE_NAME" "$RESTORE_ID"
+        ;;
+    cleanup )
+        cleanup_backups "${1:-}"
+        ;;
+    rebuild )
+        rebuild_index_from_files
+        ;;
+    plugins|themes|wp-content|uploads|site|full )
+        NAME=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -n|--name)
+                    shift
+                    name_parts=""
+                    while [[ $# -gt 0 && ! "$1" =~ ^-- && ! "$1" =~ ^-[a-z] ]]; do
+                        name_parts="$name_parts $1"
+                        shift
+                    done
+                    NAME="$(sanitize_name "$name_parts")"
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        create_backup "$COMMAND" "$NAME"
+        ;;
+    *)
+        echo -e "${RED}Error:${RESET} Invalid scope or command '${COMMAND}'"
+        echo "Run 'ddev wp-backup --help' for usage information."
+        exit 1
+        ;;
+esac
