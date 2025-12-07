@@ -1,0 +1,317 @@
+# wp-backup: WordPress Backup & Restore for DDEV
+
+A comprehensive backup and restore system for WordPress sites running in DDEV. Create scoped backups of your database and files, then restore them with a single command.
+
+## Requirements
+
+**Required:**
+- `jq` - JSON processor for managing backup metadata
+  ```bash
+  sudo apt install jq
+  ```
+
+**Optional:**
+- `pv` - Provides progress bars for large backup operations
+  ```bash
+  sudo apt install pv
+  ```
+
+## Quick Start
+
+```bash
+# Create a backup of your entire site (excluding uploads)
+ddev wp-backup
+
+# Create a named backup before updating plugins
+ddev wp-backup plugins -n before_update
+
+# List all backups
+ddev wp-backup list
+
+# Restore the latest backup
+ddev wp-backup restore
+
+# Restore a specific named backup
+ddev wp-backup restore -n before_update
+```
+
+## Understanding Scopes
+
+Scopes determine what gets backed up. All scopes include the database plus the specified files:
+
+| Scope | Database | Files Included |
+|-------|----------|----------------|
+| `plugins` | ✓ | wp-content/plugins |
+| `themes` | ✓ | wp-content/themes |
+| `wp-content` | ✓ | wp-content (excluding uploads) |
+| `uploads` | ✓ | wp-content/uploads |
+| `site` | ✓ | Entire site (excluding uploads) **[DEFAULT]** |
+| `full` | ✓ | Entire site (including uploads) |
+
+**Why exclude uploads?** Media files are often large and change infrequently. The `site` scope is faster and sufficient for most development needs. Use `full` when you need everything.
+
+## Creating Backups
+
+### Basic Backup (Default Scope)
+```bash
+ddev wp-backup
+```
+Creates a backup of your database and entire site (excluding uploads).
+
+### Scope-Specific Backups
+```bash
+# Before updating plugins
+ddev wp-backup plugins
+
+# Before changing themes
+ddev wp-backup themes
+
+# Full site backup including media
+ddev wp-backup full
+```
+
+### Named Backups
+Names help identify backups. They're automatically sanitized (lowercase, underscores for spaces):
+
+```bash
+ddev wp-backup plugins -n before_update
+ddev wp-backup plugins --name "Before Update"  # Same as above
+```
+
+**Multiple backups can share the same name** - the timestamp makes each unique. When restoring by name, you'll get the most recent one.
+
+## Listing Backups
+
+### List All Backups
+```bash
+ddev wp-backup list
+```
+
+### Filter by Scope
+```bash
+ddev wp-backup list plugins
+ddev wp-backup list full
+```
+
+Example output:
+```
+Available Backups:
+
+SCOPE         NAME                            SIZE      CREATED
+────────────  ──────────────────────────────  ────────  ────────────────────
+plugins       before_update                   45MB      2025-12-07 09:18:55
+site          -                               120MB     2025-12-07 08:30:12
+full          pre_migration                   850MB     2025-12-06 15:22:03
+```
+
+**Note:** The `-` in the NAME column indicates an unnamed backup.
+
+## Restoring Backups
+
+### Restore Priority
+
+When you restore, the command searches for backups in this order:
+
+1. **By ID** (exact match)
+2. **By scope + name** (latest matching both)
+3. **By name only** (latest with that name, any scope)
+4. **By scope only** (latest for that scope)
+5. **Latest backup** (most recent, any scope)
+
+### Restore Latest Backup
+```bash
+# Restore the most recent backup (any scope)
+ddev wp-backup restore
+```
+
+### Restore by Scope
+```bash
+# Restore the latest plugins backup
+ddev wp-backup restore plugins
+
+# Restore the latest full backup
+ddev wp-backup restore full
+```
+
+### Restore by Name
+```bash
+# Restore latest backup named 'before_update' (any scope)
+ddev wp-backup restore -n before_update
+
+# Restore latest plugins backup named 'before_update'
+ddev wp-backup restore plugins -n before_update
+```
+
+### Restore by ID
+When multiple backups share a name, use the specific ID:
+
+```bash
+# Get the ID from 'ddev wp-backup list'
+ddev wp-backup restore -i plugins-20251207-091855-before_update
+```
+
+### What Gets Deleted During Restore?
+
+The restore process **deletes files** based on scope before extracting the backup:
+
+| Scope | What Gets Deleted | Special Handling |
+|-------|------------------|------------------|
+| `plugins` | wp-content/plugins | None |
+| `themes` | wp-content/themes | None |
+| `wp-content` | wp-content/* | **Uploads are preserved** |
+| `uploads` | wp-content/uploads | None |
+| `site` / `full` | Everything except .ddev | None |
+
+**You will be prompted to confirm** before any files are deleted.
+
+## Cleanup
+
+### Remove All Backups
+```bash
+ddev wp-backup cleanup
+```
+
+### Remove Backups by Scope
+```bash
+# Remove all plugins backups
+ddev wp-backup cleanup plugins
+
+# Remove all full backups
+ddev wp-backup cleanup full
+```
+
+### Remove Backups by Name
+```bash
+# Remove all backups named 'before_update' (any scope)
+ddev wp-backup cleanup before_update
+```
+
+**Note:** Cleanup deletes both backup files and removes entries from the index. You'll be prompted to confirm.
+
+## Advanced Features
+
+### Rebuild Index
+
+If your backup index becomes corrupted or out of sync:
+
+```bash
+ddev wp-backup rebuild
+```
+
+This scans all backup files in `.ddev/backups/` and reconstructs the index. Useful for:
+- Recovering from a corrupted index.json
+- Importing backups created on another machine
+- Fixing mismatched metadata
+
+### Backup Verification
+
+All backups are automatically verified after creation:
+- Gzip integrity test
+- Tar archive integrity test
+- File size validation (ensures non-empty files)
+
+If verification fails, the backup files are deleted and you'll see an error.
+
+## Common Workflows
+
+### Before Plugin Update
+```bash
+# Create a backup
+ddev wp-backup plugins -n before_acf_update
+
+# Update the plugin...
+# If something breaks:
+
+ddev wp-backup restore plugins -n before_acf_update
+```
+
+### Before Major Changes
+```bash
+# Full backup before big changes
+ddev wp-backup full -n before_redesign
+
+# Make changes...
+# To roll back:
+
+ddev wp-backup restore full -n before_redesign
+```
+
+### Regular Development Snapshots
+```bash
+# Quick site backup (default, excludes uploads)
+ddev wp-backup -n working_state
+
+# Later, if you need to reset:
+ddev wp-backup restore -n working_state
+```
+
+### Testing Theme Changes
+```bash
+# Backup current theme
+ddev wp-backup themes -n before_customization
+
+# Test changes...
+# Not happy? Restore:
+
+ddev wp-backup restore themes -n before_customization
+```
+
+## File Locations
+
+All backups are stored in your project's `.ddev/backups/` directory:
+
+```
+.ddev/backups/
+├── index.json                                    # Metadata tracking
+├── plugins-20251207-091855-before_update-files.tar.gz
+├── plugins-20251207-091855-before_update-db.sql.gz
+├── site-20251207-083012--files.tar.gz           # Unnamed backup
+└── site-20251207-083012--db.sql.gz
+```
+
+Each backup consists of:
+- **{id}-files.tar.gz** - Compressed filesystem backup
+- **{id}-db.sql.gz** - Compressed database dump
+- **index.json** entry with metadata
+
+## Troubleshooting
+
+### "Error: jq is required but not installed"
+Install jq:
+```bash
+sudo apt install jq
+```
+
+### "No matching backup found"
+- Run `ddev wp-backup list` to see available backups
+- Check that you're using the correct scope or name
+- Verify backup files exist in `.ddev/backups/`
+
+### Index Out of Sync
+If backups exist but don't appear in listings:
+```bash
+ddev wp-backup rebuild
+```
+
+### Backup Verification Failed
+This usually indicates:
+- Insufficient disk space
+- Permission issues
+- Interrupted backup process
+
+Check disk space with `df -h` and try again.
+
+## Help
+
+View built-in help:
+```bash
+ddev wp-backup --help
+```
+
+## Best Practices
+
+1. **Name your backups** - Future you will thank present you
+2. **Use specific scopes** - Faster backups and restores
+3. **Regular cleanups** - Remove old backups to save disk space
+4. **Test restores** - Verify backups work before you need them
+5. **Before major changes** - Always create a backup first

@@ -3,4 +3,6 @@
 
 # But not these:
 !.gitignore
+!CLAUDE.md
+!README.md
 !wp-backup
