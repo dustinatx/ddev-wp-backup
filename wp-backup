@@ -497,7 +497,7 @@ restore_backup() {
         backup_json=$(find_latest_backup)
     fi
 
-    if [ "$backup_json" = "null" ]; then
+    if [ -z "$backup_json" ] || [ "$backup_json" = "null" ]; then
         echo -e "${RED}No matching backup found.${RESET}"
         exit 1
     fi
