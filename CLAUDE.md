@@ -111,7 +111,7 @@ Scope-aware deletion during restore (lines 476-530):
 - `jq`: JSON parsing for index management. Script exits if not found.
 
 **Optional**:
-- `pv`: Progress bars for tar operations. Script detects and uses if available (`HAS_PV` variable).
+- `pv`: Shows transfer rate and throughput during backup/restore operations. Displays accurate progress bars for restore (reading compressed files), but shows throughput metrics only for backup creation (due to tar streaming and compression). Script detects and uses if available (`HAS_PV` variable).
 
 ### File Paths
 

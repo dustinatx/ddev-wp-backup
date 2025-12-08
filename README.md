@@ -11,7 +11,7 @@ A comprehensive backup and restore system for WordPress sites running in DDEV. C
   ```
 
 **Optional:**
-- `pv` - Provides progress bars for large backup operations
+- `pv` - Shows transfer rate and throughput during backup/restore operations
   ```bash
   sudo apt install pv
   ```

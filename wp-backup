@@ -4,7 +4,7 @@ set -euo pipefail
 # ==========================================================
 # wp-backup: WordPress Backup/Restore System for DDEV
 # Requires: jq (host-side)
-# Optional: pv (for progress bars on large tar operations)
+# Optional: pv (shows transfer rate and throughput during operations)
 #
 # Supports:
 #   ddev wp-backup [scope] [--name NAME]
@@ -43,7 +43,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # ----------------------------------------------------------
-# Check for pv (optional, for progress bars)
+# Check for pv (optional, for transfer rate display)
 # ----------------------------------------------------------
 HAS_PV=false
 if command -v pv >/dev/null 2>&1; then
@@ -118,7 +118,7 @@ ${BOLD}wp-backup: WordPress Backup/Restore for DDEV${RESET}
 
 Requirements:
   - jq (required): sudo apt install jq
-  - pv (optional, for progress bars): sudo apt install pv
+  - pv (optional, shows transfer rate/throughput): sudo apt install pv
 
 Usage:
   ddev wp-backup [scope] [-n|--name NAME]
@@ -313,8 +313,9 @@ create_backup() {
         done
 
         if [ "$HAS_PV" = true ]; then
-            echo -e "${GREEN}✔ Filesystem backup (with progress)...${RESET}"
-            tar -cf - "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}" | pv | gzip > "${BACKUP_DIR}/${files_tar}"
+            echo -e "${GREEN}✔ Filesystem backup...${RESET}"
+            # Show throughput without progress bar (can't accurately estimate tar stream size)
+            tar -cf - "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}" | pv -Wrab | gzip > "${BACKUP_DIR}/${files_tar}"
         else
             echo -e "${GREEN}✔ Filesystem backup...${RESET}"
             tar -czf "${BACKUP_DIR}/${files_tar}" "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}"
@@ -541,6 +542,7 @@ restore_backup() {
     if [ "$backup_scope" != "db" ]; then
         if [ "$HAS_PV" = true ]; then
             echo -e "${GREEN}✔ Extracting files (with progress)...${RESET}"
+            # pv can automatically detect file size when reading from a file
             pv "${BACKUP_DIR}/${files}" | tar -xzf - -C "${PROJECT_ROOT}"
         else
             echo -e "${GREEN}✔ Extracting files...${RESET}"
@@ -698,6 +700,17 @@ case "$COMMAND" in
         ;;
     -h|--help )
         show_help
+        ;;
+    -n|--name )
+        # Handle case where -n/--name is first argument (default to site scope)
+        NAME=""
+        name_parts=""
+        while [[ $# -gt 0 && ! "$1" =~ ^-- && ! "$1" =~ ^-[a-z] ]]; do
+            name_parts="$name_parts $1"
+            shift
+        done
+        NAME="$(sanitize_name "$name_parts")"
+        create_backup "site" "$NAME"
         ;;
     list )
         SCOPE="${1:-}"
