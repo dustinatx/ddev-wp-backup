@@ -324,7 +324,15 @@ create_backup() {
 
     # Create DB backup
     echo -e "${GREEN}✔ Database backup...${RESET}"
-    ddev export-db --gzip -f "${BACKUP_DIR}/${db_dump}"
+    if [ "$HAS_PV" = true ]; then
+        # Export to temp file, then pipe through pv while compressing
+        local temp_sql="${BACKUP_DIR}/${db_dump}.tmp"
+        ddev export-db --gzip=false -f "${temp_sql}" >/dev/null 2>&1
+        pv -Wrab "${temp_sql}" | gzip > "${BACKUP_DIR}/${db_dump}"
+        rm -f "${temp_sql}"
+    else
+        ddev export-db --gzip -f "${BACKUP_DIR}/${db_dump}"
+    fi
 
     # Verify backup integrity
     echo -e "${GREEN}✔ Verifying backup integrity...${RESET}"
