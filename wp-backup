@@ -124,9 +124,9 @@ is_valid_scope() {
 # Show help
 # ----------------------------------------------------------
 show_help() {
+echo -e "${BOLD}wp-backup: WordPress Backup/Restore for DDEV${RESET}"
+echo ""
 cat <<EOF
-${BOLD}wp-backup: WordPress Backup/Restore for DDEV${RESET}
-
 Requirements:
   - jq (required): sudo apt install jq
   - pv (optional, shows transfer rate/throughput): sudo apt install pv
@@ -381,6 +381,7 @@ create_backup() {
     mv "${INDEX_FILE}.tmp" "${INDEX_FILE}"
 
     echo -e "${GREEN}✔ Backup created:${RESET} $id"
+    echo -e "  To see all backups, run: ${BOLD}ddev wp-backup list${RESET}"
 }
 
 # ----------------------------------------------------------
@@ -582,6 +583,7 @@ restore_backup() {
     ddev import-db --file="${BACKUP_DIR}/${db}"
 
     echo -e "${GREEN}✔ Restore complete:${RESET} $id"
+    echo -e "  To see all backups, run: ${BOLD}ddev wp-backup list${RESET}"
 }
 
 # ----------------------------------------------------------
@@ -712,6 +714,7 @@ cleanup_backups() {
     mv "${INDEX_FILE}.tmp" "${INDEX_FILE}"
 
     echo -e "${GREEN}✔ Cleanup complete.${RESET}"
+    echo -e "  To see all backups, run: ${BOLD}ddev wp-backup list${RESET}"
 }
 
 # ----------------------------------------------------------
