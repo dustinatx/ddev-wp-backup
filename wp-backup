@@ -97,7 +97,7 @@ init_index
 # ----------------------------------------------------------
 # Validate scope
 # ----------------------------------------------------------
-valid_scopes=("plugins" "themes" "wp-content" "uploads" "site" "full")
+valid_scopes=("db" "plugins" "themes" "wp-content" "uploads" "site" "full")
 
 is_valid_scope() {
     local scope="$1"
@@ -128,6 +128,7 @@ Usage:
   ddev wp-backup rebuild
 
 Scopes:
+  db           Backup database only (no files)
   plugins      Backup DB + wp-content/plugins
   themes       Backup DB + wp-content/themes
   wp-content   Backup DB + wp-content (excluding uploads)
@@ -179,6 +180,10 @@ build_tar_command() {
     local tar_cmd="tar -czf"
 
     case "$scope" in
+        db)
+            INCLUDE=()
+            EXCLUDE=()
+            ;;
         plugins)
             INCLUDE=("wp-content/plugins")
             EXCLUDE=()
@@ -216,26 +221,29 @@ build_tar_command() {
 verify_backup_files() {
     local files_tar="$1"
     local db_dump="$2"
+    local scope="$3"
     local all_ok=true
 
-    # Test tar.gz integrity
-    if ! gzip -t "${BACKUP_DIR}/${files_tar}" 2>/dev/null; then
-        echo -e "${RED}✗ Filesystem backup failed gzip integrity test${RESET}"
-        all_ok=false
-    elif ! tar -tzf "${BACKUP_DIR}/${files_tar}" >/dev/null 2>&1; then
-        echo -e "${RED}✗ Filesystem backup failed tar integrity test${RESET}"
-        all_ok=false
+    # Test tar.gz integrity (skip for db-only scope)
+    if [ "$scope" != "db" ]; then
+        if ! gzip -t "${BACKUP_DIR}/${files_tar}" 2>/dev/null; then
+            echo -e "${RED}✗ Filesystem backup failed gzip integrity test${RESET}"
+            all_ok=false
+        elif ! tar -tzf "${BACKUP_DIR}/${files_tar}" >/dev/null 2>&1; then
+            echo -e "${RED}✗ Filesystem backup failed tar integrity test${RESET}"
+            all_ok=false
+        fi
+
+        # Check file sizes
+        if [ ! -s "${BACKUP_DIR}/${files_tar}" ]; then
+            echo -e "${RED}✗ Filesystem backup is empty${RESET}"
+            all_ok=false
+        fi
     fi
 
     # Test db.sql.gz integrity
     if ! gzip -t "${BACKUP_DIR}/${db_dump}" 2>/dev/null; then
         echo -e "${RED}✗ Database backup failed gzip integrity test${RESET}"
-        all_ok=false
-    fi
-
-    # Check file sizes
-    if [ ! -s "${BACKUP_DIR}/${files_tar}" ]; then
-        echo -e "${RED}✗ Filesystem backup is empty${RESET}"
         all_ok=false
     fi
 
@@ -290,25 +298,27 @@ create_backup() {
 
     build_tar_command "$scope"
 
-    # Build tar excludes
-    TAR_EXCLUDES=()
-    for ex in "${EXCLUDE[@]}"; do
-        TAR_EXCLUDES+=(--exclude="${ex}")
-    done
+    # Create FS backup (skip for db-only scope)
+    if [ "$scope" != "db" ]; then
+        # Build tar excludes
+        TAR_EXCLUDES=()
+        for ex in "${EXCLUDE[@]}"; do
+            TAR_EXCLUDES+=(--exclude="${ex}")
+        done
 
-    # Tar includes
-    TAR_INCLUDES=()
-    for inc in "${INCLUDE[@]}"; do
-        TAR_INCLUDES+=("${inc}")
-    done
+        # Tar includes
+        TAR_INCLUDES=()
+        for inc in "${INCLUDE[@]}"; do
+            TAR_INCLUDES+=("${inc}")
+        done
 
-    # Create FS backup
-    if [ "$HAS_PV" = true ]; then
-        echo -e "${GREEN}✔ Filesystem backup (with progress)...${RESET}"
-        tar -cf - "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}" | pv | gzip > "${BACKUP_DIR}/${files_tar}"
-    else
-        echo -e "${GREEN}✔ Filesystem backup...${RESET}"
-        tar -czf "${BACKUP_DIR}/${files_tar}" "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}"
+        if [ "$HAS_PV" = true ]; then
+            echo -e "${GREEN}✔ Filesystem backup (with progress)...${RESET}"
+            tar -cf - "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}" | pv | gzip > "${BACKUP_DIR}/${files_tar}"
+        else
+            echo -e "${GREEN}✔ Filesystem backup...${RESET}"
+            tar -czf "${BACKUP_DIR}/${files_tar}" "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}"
+        fi
     fi
 
     # Create DB backup
@@ -317,7 +327,7 @@ create_backup() {
 
     # Verify backup integrity
     echo -e "${GREEN}✔ Verifying backup integrity...${RESET}"
-    if ! verify_backup_files "$files_tar" "$db_dump"; then
+    if ! verify_backup_files "$files_tar" "$db_dump" "$scope"; then
         echo -e "${RED}✗ Backup verification failed. Cleaning up...${RESET}"
         rm -f "${BACKUP_DIR}/${files_tar}" "${BACKUP_DIR}/${db_dump}"
         exit 1
@@ -366,12 +376,20 @@ list_backups() {
     local valid_count=0
 
     while IFS=$'\t' read -r id_val scope_val name_val ts_val files_val db_val; do
-        # Check if both backup files exist
-        if [ -f "${BACKUP_DIR}/${files_val}" ] && [ -f "${BACKUP_DIR}/${db_val}" ]; then
+        # Check if required backup files exist (db scope only needs db file)
+        local files_exist=true
+        if [ "$scope_val" != "db" ] && [ ! -f "${BACKUP_DIR}/${files_val}" ]; then
+            files_exist=false
+        fi
+
+        if [ "$files_exist" = true ] && [ -f "${BACKUP_DIR}/${db_val}" ]; then
             # Only include if scope filter matches (or no filter)
             if [ -z "$scope" ] || [ "$scope_val" == "$scope" ]; then
                 # Calculate total size
-                local files_size=$(stat -c%s "${BACKUP_DIR}/${files_val}" 2>/dev/null || echo 0)
+                local files_size=0
+                if [ "$scope_val" != "db" ]; then
+                    files_size=$(stat -c%s "${BACKUP_DIR}/${files_val}" 2>/dev/null || echo 0)
+                fi
                 local db_size=$(stat -c%s "${BACKUP_DIR}/${db_val}" 2>/dev/null || echo 0)
                 local total_size=$((files_size + db_size))
                 local size_formatted=$(format_size "$total_size")
@@ -465,6 +483,11 @@ restore_backup() {
 
     # Scope-aware deletion and warning
     case "$backup_scope" in
+        db)
+            echo -e "${YELLOW}This will restore the database only (no files will be changed)${RESET}"
+            read -rp "Continue? [y/N] " yn
+            [[ "$yn" == "y" ]] || exit 0
+            ;;
         plugins)
             echo -e "${YELLOW}This will delete wp-content/plugins${RESET}"
             read -rp "Continue? [y/N] " yn
@@ -514,13 +537,15 @@ restore_backup() {
             ;;
     esac
 
-    # Extract files
-    if [ "$HAS_PV" = true ]; then
-        echo -e "${GREEN}✔ Extracting files (with progress)...${RESET}"
-        pv "${BACKUP_DIR}/${files}" | tar -xzf - -C "${PROJECT_ROOT}"
-    else
-        echo -e "${GREEN}✔ Extracting files...${RESET}"
-        tar -xzf "${BACKUP_DIR}/${files}" -C "${PROJECT_ROOT}"
+    # Extract files (skip for db-only scope)
+    if [ "$backup_scope" != "db" ]; then
+        if [ "$HAS_PV" = true ]; then
+            echo -e "${GREEN}✔ Extracting files (with progress)...${RESET}"
+            pv "${BACKUP_DIR}/${files}" | tar -xzf - -C "${PROJECT_ROOT}"
+        else
+            echo -e "${GREEN}✔ Extracting files...${RESET}"
+            tar -xzf "${BACKUP_DIR}/${files}" -C "${PROJECT_ROOT}"
+        fi
     fi
 
     # Import DB
@@ -712,7 +737,7 @@ case "$COMMAND" in
     rebuild )
         rebuild_index_from_files
         ;;
-    plugins|themes|wp-content|uploads|site|full )
+    db|plugins|themes|wp-content|uploads|site|full )
         NAME=""
         while [[ $# -gt 0 ]]; do
             case "$1" in
