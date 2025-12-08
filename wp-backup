@@ -723,12 +723,11 @@ cleanup_backups() {
         exit 1
     fi
 
-    for id in $(echo "$filtered" | jq -r '.[].id'); do
-        files=$(echo "$filtered" | jq -r --arg id "$id" '.[] | select(.id == $id) | .files')
-        db=$(echo "$filtered" | jq -r --arg id "$id" '.[] | select(.id == $id) | .db')
-
-        rm -f "${BACKUP_DIR}/${files}" "${BACKUP_DIR}/${db}"
-    done
+    # Extract id/files/db in one jq call and delete files
+    while IFS=$'\t' read -r id files db; do
+        [ "$files" != "null" ] && rm -f "${BACKUP_DIR}/${files}"
+        rm -f "${BACKUP_DIR}/${db}"
+    done < <(echo "$filtered" | jq -r '.[] | [.id, .files, .db] | @tsv')
 
     jq --arg t "$target" '[.[] | select(.scope != $t and .name != $t)]' \
        "${INDEX_FILE}" > "${INDEX_FILE}.tmp"
