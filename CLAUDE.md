@@ -112,6 +112,7 @@ Scope-aware deletion during restore (lines 476-530):
 
 **Optional**:
 - `pv`: Shows transfer rate and throughput during backup/restore operations. Displays accurate progress bars for restore (reading compressed files), but shows throughput metrics only for backup creation (due to tar streaming and compression). Script detects and uses if available (`HAS_PV` variable).
+- `pigz`: Parallel gzip implementation for faster compression using multiple CPU cores. Script automatically detects and uses if available (`GZIP_CMD` variable). Falls back to standard `gzip` if not installed.
 
 ### File Paths
 

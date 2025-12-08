@@ -15,6 +15,10 @@ A comprehensive backup and restore system for WordPress sites running in DDEV. C
   ```bash
   sudo apt install pv
   ```
+- `pigz` - Parallel gzip for faster compression (uses multiple CPU cores)
+  ```bash
+  sudo apt install pigz
+  ```
 
 ## Quick Start
 

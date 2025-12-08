@@ -5,6 +5,7 @@ set -euo pipefail
 # wp-backup: WordPress Backup/Restore System for DDEV
 # Requires: jq (host-side)
 # Optional: pv (shows transfer rate and throughput during operations)
+#           pigz (parallel gzip for faster compression)
 #
 # Supports:
 #   ddev wp-backup [scope] [--name NAME]
@@ -48,6 +49,16 @@ fi
 HAS_PV=false
 if command -v pv >/dev/null 2>&1; then
     HAS_PV=true
+fi
+
+# ----------------------------------------------------------
+# Check for pigz (optional, for parallel compression)
+# ----------------------------------------------------------
+GZIP_CMD="gzip"
+HAS_PIGZ=false
+if command -v pigz >/dev/null 2>&1; then
+    GZIP_CMD="pigz"
+    HAS_PIGZ=true
 fi
 
 # ----------------------------------------------------------
@@ -119,6 +130,7 @@ ${BOLD}wp-backup: WordPress Backup/Restore for DDEV${RESET}
 Requirements:
   - jq (required): sudo apt install jq
   - pv (optional, shows transfer rate/throughput): sudo apt install pv
+  - pigz (optional, parallel compression for speed): sudo apt install pigz
 
 Usage:
   ddev wp-backup [scope] [-n|--name NAME]
@@ -296,6 +308,13 @@ create_backup() {
 
     echo -e "${BOLD}Creating backup:${RESET} $id"
 
+    # Show compression info
+    if [ "$HAS_PIGZ" = true ]; then
+        echo -e "${GREEN}  Using pigz (parallel compression)${RESET}"
+    else
+        echo -e "${YELLOW}  Tip: Install pigz for faster compression: sudo apt install pigz${RESET}"
+    fi
+
     build_tar_command "$scope"
 
     # Create FS backup (skip for db-only scope)
@@ -315,10 +334,10 @@ create_backup() {
         if [ "$HAS_PV" = true ]; then
             echo -e "${GREEN}✔ Filesystem backup...${RESET}"
             # Show throughput without progress bar (can't accurately estimate tar stream size)
-            tar -cf - "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}" | pv -Wrab | gzip > "${BACKUP_DIR}/${files_tar}"
+            tar -cf - "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}" | pv -Wrab | $GZIP_CMD > "${BACKUP_DIR}/${files_tar}"
         else
             echo -e "${GREEN}✔ Filesystem backup...${RESET}"
-            tar -czf "${BACKUP_DIR}/${files_tar}" "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}"
+            tar -cf - "${TAR_EXCLUDES[@]}" "${TAR_INCLUDES[@]}" | $GZIP_CMD > "${BACKUP_DIR}/${files_tar}"
         fi
     fi
 
@@ -328,7 +347,7 @@ create_backup() {
         # Export to temp file, then pipe through pv while compressing
         local temp_sql="${BACKUP_DIR}/${db_dump}.tmp"
         ddev export-db --gzip=false -f "${temp_sql}" >/dev/null 2>&1
-        pv -Wrab "${temp_sql}" | gzip > "${BACKUP_DIR}/${db_dump}"
+        pv -Wrab "${temp_sql}" | $GZIP_CMD > "${BACKUP_DIR}/${db_dump}"
         rm -f "${temp_sql}"
     else
         ddev export-db --gzip -f "${BACKUP_DIR}/${db_dump}"
