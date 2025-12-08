@@ -37,10 +37,11 @@ ddev wp-backup restore -n before_update
 
 ## Understanding Scopes
 
-Scopes determine what gets backed up. All scopes include the database plus the specified files:
+Scopes determine what gets backed up. Most scopes include the database plus specified files:
 
 | Scope | Database | Files Included |
 |-------|----------|----------------|
+| `db` | ✓ | None (database only) |
 | `plugins` | ✓ | wp-content/plugins |
 | `themes` | ✓ | wp-content/themes |
 | `wp-content` | ✓ | wp-content (excluding uploads) |
@@ -49,6 +50,8 @@ Scopes determine what gets backed up. All scopes include the database plus the s
 | `full` | ✓ | Entire site (including uploads) |
 
 **Why exclude uploads?** Media files are often large and change infrequently. The `site` scope is faster and sufficient for most development needs. Use `full` when you need everything.
+
+**When to use `db` scope?** Perfect for quick database snapshots when you only need to preserve data, not files. Much faster than other scopes.
 
 ## Creating Backups
 
@@ -60,6 +63,9 @@ Creates a backup of your database and entire site (excluding uploads).
 
 ### Scope-Specific Backups
 ```bash
+# Quick database snapshot
+ddev wp-backup db
+
 # Before updating plugins
 ddev wp-backup plugins
 
@@ -156,6 +162,7 @@ The restore process **deletes files** based on scope before extracting the backu
 
 | Scope | What Gets Deleted | Special Handling |
 |-------|------------------|------------------|
+| `db` | Nothing | Database only, no file changes |
 | `plugins` | wp-content/plugins | None |
 | `themes` | wp-content/themes | None |
 | `wp-content` | wp-content/* | **Uploads are preserved** |
@@ -214,6 +221,17 @@ If verification fails, the backup files are deleted and you'll see an error.
 
 ## Common Workflows
 
+### Quick Database Snapshot
+```bash
+# Fast database backup before making data changes
+ddev wp-backup db -n before_content_import
+
+# Import content or make database changes...
+# To roll back:
+
+ddev wp-backup restore db -n before_content_import
+```
+
 ### Before Plugin Update
 ```bash
 # Create a backup
@@ -270,7 +288,7 @@ All backups are stored in your project's `.ddev/backups/` directory:
 ```
 
 Each backup consists of:
-- **{id}-files.tar.gz** - Compressed filesystem backup
+- **{id}-files.tar.gz** - Compressed filesystem backup (not created for `db` scope)
 - **{id}-db.sql.gz** - Compressed database dump
 - **index.json** entry with metadata
 
