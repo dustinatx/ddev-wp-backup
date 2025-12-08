@@ -595,20 +595,11 @@ rebuild_index_from_files() {
     local new_index="[]"
     local count=0
 
-    # Find all -files.tar.gz files
-    for files_path in "${BACKUP_DIR}"/*-files.tar.gz; do
-        [ -e "$files_path" ] || continue
-
-        local files_name=$(basename "$files_path")
-        local id="${files_name%-files.tar.gz}"
-        local db_name="${id}-db.sql.gz"
-        local db_path="${BACKUP_DIR}/${db_name}"
-
-        # Check if corresponding db file exists
-        if [ ! -f "$db_path" ]; then
-            echo -e "${YELLOW}⚠ Warning: Missing DB file for ${files_name}${RESET}"
-            continue
-        fi
+    # Helper function to add backup entry to index
+    add_to_index() {
+        local id="$1"
+        local files_name="$2"
+        local db_name="$3"
 
         # Parse ID format: {scope}-{YYYYMMDD}-{HHMMSS}-{name}
         # Extract scope (one of the valid scopes)
@@ -621,8 +612,8 @@ rebuild_index_from_files() {
         done
 
         if [ -z "$scope" ]; then
-            echo -e "${YELLOW}⚠ Warning: Could not determine scope for ${files_name}${RESET}"
-            continue
+            echo -e "${YELLOW}⚠ Warning: Could not determine scope for ${id}${RESET}"
+            return 1
         fi
 
         # Remove scope- prefix
@@ -640,7 +631,7 @@ rebuild_index_from_files() {
         # Convert to ISO timestamp
         local ts_iso=$(date -d "${date_part:0:4}-${date_part:4:2}-${date_part:6:2} ${time_part:0:2}:${time_part:2:2}:${time_part:4:2}" -Iseconds 2>/dev/null || echo "1970-01-01T00:00:00+00:00")
 
-        # Add to index
+        # Add to index (files may be null for db-only backups)
         new_index=$(echo "$new_index" | jq --arg id "$id" \
            --arg scope "$scope" \
            --arg name "$name" \
@@ -652,11 +643,43 @@ rebuild_index_from_files() {
                 scope: $scope,
                 name: $name,
                 timestamp: $ts,
-                files: $files,
+                files: (if $files == "" then null else $files end),
                 db: $db
             }]')
 
         ((count++)) || true
+    }
+
+    # Find all -files.tar.gz files (non-db scopes)
+    for files_path in "${BACKUP_DIR}"/*-files.tar.gz; do
+        [ -e "$files_path" ] || continue
+
+        local files_name=$(basename "$files_path")
+        local id="${files_name%-files.tar.gz}"
+        local db_name="${id}-db.sql.gz"
+        local db_path="${BACKUP_DIR}/${db_name}"
+
+        # Check if corresponding db file exists
+        if [ ! -f "$db_path" ]; then
+            echo -e "${YELLOW}⚠ Warning: Missing DB file for ${files_name}${RESET}"
+            continue
+        fi
+
+        add_to_index "$id" "$files_name" "$db_name"
+    done
+
+    # Find db-only backups (db scope): -db.sql.gz files without corresponding -files.tar.gz
+    for db_path in "${BACKUP_DIR}"/*-db.sql.gz; do
+        [ -e "$db_path" ] || continue
+
+        local db_name=$(basename "$db_path")
+        local id="${db_name%-db.sql.gz}"
+        local files_path="${BACKUP_DIR}/${id}-files.tar.gz"
+
+        # Skip if this backup has a files tar (already processed above)
+        [ -f "$files_path" ] && continue
+
+        add_to_index "$id" "" "$db_name"
     done
 
     echo "$new_index" > "${INDEX_FILE}"
