@@ -56,10 +56,10 @@ fi
 sanitize_name() {
     local name="$1"
     name=$(echo "$name" | tr '[:upper:]' '[:lower:]')
-    name=$(echo "$name" | sed 's/[^a-z0-9_ ]//g')
+    name=$(echo "$name" | sed 's/[^a-z0-9_ -]//g')
     name=$(echo "$name" | sed 's/[ ]\+/_/g')
     name=$(echo "$name" | sed 's/__\+/_/g')
-    name=$(echo "$name" | sed 's/^_//; s/_$//')
+    name=$(echo "$name" | sed 's/^[_-]//; s/[-_]$//')
     echo "$name"
 }
 
