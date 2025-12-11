@@ -62,7 +62,11 @@ This is a DDEV custom commands repository. The primary command is `wp-backup`, a
 
 **Cleanup** (`cleanup_backups`):
 - Can target all backups, specific scope, or specific name
+- Optional `--keep N` flag to retain the N newest backups
+- When `--keep` is used with a scope: keeps N newest of that scope
+- When `--keep` is used without a scope: keeps N newest of each scope
 - Deletes files and removes from index
+- Shows detailed confirmation with "Keeping" and "Deleting" lists when using `--keep`
 
 **Rebuild Index** (`rebuild_index_from_files`):
 - Reconstructs index.json from existing backup files
@@ -168,6 +172,8 @@ ddev wp-backup restore db -n test_db
 
 # Test cleanup
 ddev wp-backup cleanup test_backup
+ddev wp-backup cleanup --keep 2
+ddev wp-backup cleanup plugins --keep 1
 ```
 
 ### Shell Best Practices Used

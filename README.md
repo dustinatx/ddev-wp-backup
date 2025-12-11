@@ -197,7 +197,39 @@ ddev wp-backup cleanup full
 ddev wp-backup cleanup before_update
 ```
 
-**Note:** Cleanup deletes both backup files and removes entries from the index. You'll be prompted to confirm.
+### Keep Only Recent Backups
+
+The `--keep N` flag lets you retain the N newest backups and delete the rest:
+
+```bash
+# Keep the newest 3 backups of each scope, delete the rest
+ddev wp-backup cleanup --keep 3
+
+# Keep the newest 2 plugin backups, delete older plugin backups
+ddev wp-backup cleanup plugins --keep 2
+
+# Keep only the most recent backup of each scope
+ddev wp-backup cleanup --keep 1
+```
+
+When using `--keep`, you'll see a detailed confirmation showing which backups will be kept and which will be deleted:
+
+```
+⚠ WARNING: Will delete 3 of 5 'plugins' backups (keeping newest 2)
+
+Keeping:
+  - plugins-20251207-091855-before_update
+  - plugins-20251206-100000-recent
+
+Deleting:
+  - plugins-20251205-100000-old1
+  - plugins-20251204-100000-old2
+  - plugins-20251203-100000-old3
+
+Proceed? [y/N]
+```
+
+**Note:** The `--keep` flag only works with scopes, not backup names. Cleanup deletes both backup files and removes entries from the index. You'll be prompted to confirm.
 
 ## Advanced Features
 
@@ -278,6 +310,17 @@ ddev wp-backup themes -n before_customization
 ddev wp-backup restore themes -n before_customization
 ```
 
+### Managing Disk Space
+```bash
+# Keep only the 3 most recent backups of each scope
+ddev wp-backup cleanup --keep 3
+
+# Or keep different amounts per scope
+ddev wp-backup cleanup plugins --keep 5   # Keep 5 plugin backups
+ddev wp-backup cleanup full --keep 1      # Keep only 1 full backup (they're large!)
+ddev wp-backup cleanup db --keep 10       # Keep 10 db backups (they're small)
+```
+
 ## File Locations
 
 All backups are stored in your project's `.ddev/backups/` directory:
@@ -334,6 +377,6 @@ ddev wp-backup --help
 
 1. **Name your backups** - Future you will thank present you
 2. **Use specific scopes** - Faster backups and restores
-3. **Regular cleanups** - Remove old backups to save disk space
+3. **Regular cleanups** - Use `--keep N` to automatically retain recent backups while removing old ones
 4. **Test restores** - Verify backups work before you need them
 5. **Before major changes** - Always create a backup first
