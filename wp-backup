@@ -181,6 +181,76 @@ Examples:
 EOF
 }
 
+show_help_list() {
+cat <<EOF
+Usage: ddev wp-backup list [scope]
+
+List all backups for this project, optionally filtered by scope.
+
+Arguments:
+  scope    Filter by scope (db, plugins, themes, wp-content, uploads, site, full)
+
+Examples:
+  ddev wp-backup list            # List all backups
+  ddev wp-backup list plugins    # List only plugins backups
+EOF
+}
+
+show_help_restore() {
+cat <<EOF
+Usage: ddev wp-backup restore [scope] [-n|--name NAME] [-i|--id ID]
+
+Restore a backup for this project.
+
+Options:
+  -n, --name NAME    Restore latest backup with this name
+  -i, --id ID        Restore specific backup by ID
+
+Arguments:
+  scope              Filter by scope (db, plugins, themes, wp-content, uploads, site, full)
+
+Restore Priority:
+  ID > (scope + name) > name > scope > latest
+
+Examples:
+  ddev wp-backup restore                           # Restore latest backup
+  ddev wp-backup restore plugins                   # Restore latest plugins backup
+  ddev wp-backup restore -n before_update          # Restore latest with name
+  ddev wp-backup restore plugins -n before_update  # Restore latest plugins with name
+  ddev wp-backup restore -i plugins-20251207-091855-before_update
+EOF
+}
+
+show_help_cleanup() {
+cat <<EOF
+Usage: ddev wp-backup cleanup [scope|name] [--keep N]
+
+Delete backups for this project.
+
+Options:
+  --keep N    Keep the newest N backups, delete the rest
+
+Arguments:
+  scope|name  Target a specific scope or backup name
+
+Examples:
+  ddev wp-backup cleanup                    # Delete all backups
+  ddev wp-backup cleanup plugins            # Delete all plugins backups
+  ddev wp-backup cleanup before_update      # Delete backups named 'before_update'
+  ddev wp-backup cleanup --keep 3           # Keep newest 3 of each scope
+  ddev wp-backup cleanup plugins --keep 2   # Keep newest 2 plugins backups
+EOF
+}
+
+show_help_rebuild() {
+cat <<EOF
+Usage: ddev wp-backup rebuild
+
+Reconstruct the backup index from existing backup files.
+Useful if the index becomes corrupted or out of sync.
+EOF
+}
+
 # ----------------------------------------------------------
 # Determine what files to include based on scope
 # ----------------------------------------------------------
@@ -882,6 +952,10 @@ case "$COMMAND" in
         create_backup "site" "$NAME"
         ;;
     list )
+        if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+            show_help_list
+            exit 0
+        fi
         SCOPE="${1:-}"
         list_backups "$SCOPE"
         ;;
@@ -891,6 +965,10 @@ case "$COMMAND" in
         RESTORE_ID=""
         while [[ $# -gt 0 ]]; do
             case "$1" in
+                -h|--help)
+                    show_help_restore
+                    exit 0
+                    ;;
                 -n|--name)
                     shift
                     name_parts=""
@@ -918,6 +996,10 @@ case "$COMMAND" in
         CLEANUP_KEEP=""
         while [[ $# -gt 0 ]]; do
             case "$1" in
+                -h|--help)
+                    show_help_cleanup
+                    exit 0
+                    ;;
                 --keep)
                     shift
                     CLEANUP_KEEP="$1"
@@ -935,6 +1017,10 @@ case "$COMMAND" in
         cleanup_backups "$CLEANUP_SCOPE" "$CLEANUP_KEEP"
         ;;
     rebuild )
+        if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+            show_help_rebuild
+            exit 0
+        fi
         rebuild_index_from_files
         ;;
     db|plugins|themes|wp-content|uploads|site|full )
