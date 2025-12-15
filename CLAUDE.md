@@ -101,13 +101,14 @@ else
 fi
 ```
 
-Scope-aware deletion during restore (lines 476-530):
+Scope-aware deletion during restore (lines 580-656):
 - `db`: No file deletion (database only)
 - `plugins`: Deletes wp-content/plugins
 - `themes`: Deletes wp-content/themes
 - `wp-content`: Deletes wp-content but preserves uploads (moved temporarily)
 - `uploads`: Deletes wp-content/uploads
-- `site`/`full`: Deletes all files except .ddev
+- `site`: Deletes all files except .ddev and preserves wp-content/uploads
+- `full`: Deletes all files except .ddev
 
 ### Dependencies
 
@@ -129,14 +130,14 @@ INDEX_FILE="${BACKUP_DIR}/index.json"      # Metadata index
 ### Common Development Patterns
 
 **When modifying backup scopes**:
-1. Update `valid_scopes` array (line 100)
-2. Add case to `build_tar_command` (lines 182-216)
-3. Add case to scope-aware deletion in `restore_backup` (lines 476-530)
-4. Update help text in `show_help` (lines 131-138)
-5. Update argument parser to include new scope (line 732)
+1. Update `valid_scopes` array (line 106)
+2. Add case to `build_tar_command` (lines 257-294)
+3. Add case to scope-aware deletion in `restore_backup` (lines 580-656)
+4. Update help text in `show_help` (lines 137-144)
+5. Update argument parser to include new scope (line 1026)
 
 **When adding new operations**:
-- Add case to main argument parser (lines 670-740)
+- Add case to main argument parser (lines 936-1051)
 - Follow pattern of existing operations for consistency
 - Always validate scope with `is_valid_scope` before use
 

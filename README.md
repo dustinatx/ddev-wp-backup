@@ -171,7 +171,8 @@ The restore process **deletes files** based on scope before extracting the backu
 | `themes` | wp-content/themes | None |
 | `wp-content` | wp-content/* | **Uploads are preserved** |
 | `uploads` | wp-content/uploads | None |
-| `site` / `full` | Everything except .ddev | None |
+| `site` | Everything except .ddev | **Uploads are preserved** |
+| `full` | Everything except .ddev | None |
 
 **You will be prompted to confirm** before any files are deleted.
 
