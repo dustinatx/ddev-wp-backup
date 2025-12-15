@@ -547,7 +547,7 @@ restore_backup() {
             rm -rf "${PROJECT_ROOT}/wp-content/uploads"
             ;;
         site)
-            echo -e "${YELLOW}This will delete ALL files except .ddev and wp-content/uploads${RESET}"
+            echo -e "${YELLOW}This will delete ALL project files except .ddev and wp-content/uploads${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
             # Save uploads if it exists
@@ -570,7 +570,7 @@ restore_backup() {
             fi
             ;;
         full)
-            echo -e "${YELLOW}This will delete ALL files except .ddev${RESET}"
+            echo -e "${YELLOW}This will delete ALL project files except .ddev${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
             # Delete project files except .ddev
@@ -731,7 +731,7 @@ cleanup_backups() {
     if [ -z "$keep" ]; then
         # Build warning message based on what's being deleted
         if [ -z "$target" ]; then
-            echo -e "${YELLOW}⚠ WARNING:${RESET} This will delete ALL backups."
+            echo -e "${YELLOW}⚠ WARNING:${RESET} This will delete ALL backups for this project."
         else
             # Check if target is a valid scope
             if is_valid_scope "$target"; then
