@@ -546,7 +546,30 @@ restore_backup() {
             [[ "$yn" == "y" ]] || exit 0
             rm -rf "${PROJECT_ROOT}/wp-content/uploads"
             ;;
-        site|full)
+        site)
+            echo -e "${YELLOW}This will delete ALL files except .ddev and wp-content/uploads${RESET}"
+            read -rp "Continue? [y/N] " yn
+            [[ "$yn" == "y" ]] || exit 0
+            # Save uploads if it exists
+            if [ -d "${PROJECT_ROOT}/wp-content/uploads" ]; then
+                mv "${PROJECT_ROOT}/wp-content/uploads" "${PROJECT_ROOT}/uploads-temp"
+            fi
+            # Delete project files except .ddev
+            shopt -s dotglob nullglob
+            for path in "${PROJECT_ROOT}"/*; do
+                [ -e "$path" ] || continue
+                if [[ "$(basename "$path")" == ".ddev" ]]; then
+                    continue
+                fi
+                rm -rf "$path"
+            done
+            # Restore uploads
+            if [ -d "${PROJECT_ROOT}/uploads-temp" ]; then
+                mkdir -p "${PROJECT_ROOT}/wp-content"
+                mv "${PROJECT_ROOT}/uploads-temp" "${PROJECT_ROOT}/wp-content/uploads"
+            fi
+            ;;
+        full)
             echo -e "${YELLOW}This will delete ALL files except .ddev${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
