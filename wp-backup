@@ -514,19 +514,19 @@ restore_backup() {
             [[ "$yn" == "y" ]] || exit 0
             ;;
         plugins)
-            echo -e "${YELLOW}This will delete wp-content/plugins${RESET}"
+            echo -e "${YELLOW}This will delete this project's wp-content/plugins & restore from backup${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
             rm -rf "${PROJECT_ROOT}/wp-content/plugins"
             ;;
         themes)
-            echo -e "${YELLOW}This will delete wp-content/themes${RESET}"
+            echo -e "${YELLOW}This will delete this project's wp-content/themes & restore from backup${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
             rm -rf "${PROJECT_ROOT}/wp-content/themes"
             ;;
         wp-content)
-            echo -e "${YELLOW}This will delete wp-content (excluding uploads)${RESET}"
+            echo -e "${YELLOW}This will delete this project's wp-content (excluding uploads) & restore from backup${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
             # Save uploads if it exists
@@ -541,13 +541,13 @@ restore_backup() {
             fi
             ;;
         uploads)
-            echo -e "${YELLOW}This will delete wp-content/uploads${RESET}"
+            echo -e "${YELLOW}This will delete this project's wp-content/uploads & restore from backup${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
             rm -rf "${PROJECT_ROOT}/wp-content/uploads"
             ;;
         site)
-            echo -e "${YELLOW}This will delete ALL project files except .ddev and wp-content/uploads${RESET}"
+            echo -e "${YELLOW}This will delete ALL project files except .ddev and wp-content/uploads & restore from backup${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
             # Save uploads if it exists
@@ -570,7 +570,7 @@ restore_backup() {
             fi
             ;;
         full)
-            echo -e "${YELLOW}This will delete ALL project files except .ddev${RESET}"
+            echo -e "${YELLOW}This will delete ALL project files except .ddev & restore from backup${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
             # Delete project files except .ddev
