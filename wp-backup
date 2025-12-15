@@ -13,7 +13,7 @@ set -euo pipefail
 #   ddev wp-backup restore [scope] [--name NAME]
 #   ddev wp-backup cleanup [scope|name]
 #
-# Default scope = site
+# Default scope = full
 # ==========================================================
 
 # ----------------------------------------------------------
@@ -103,7 +103,7 @@ init_index
 # ----------------------------------------------------------
 # Validate scope
 # ----------------------------------------------------------
-valid_scopes=("db" "plugins" "themes" "wp-content" "uploads" "site" "full")
+valid_scopes=("db" "plugins" "themes" "extensions" "full")
 
 is_valid_scope() {
     local scope="$1"
@@ -138,12 +138,10 @@ Scopes:
   db           Backup database only (no files)
   plugins      Backup DB + wp-content/plugins
   themes       Backup DB + wp-content/themes
-  wp-content   Backup DB + wp-content (excluding uploads)
-  uploads      Backup DB + wp-content/uploads
-  site         Backup DB + entire site (excluding uploads)
-  full         Backup DB + entire site (including uploads)
+  extensions   Backup DB + plugins, themes, mu-plugins & drop-ins
+  full         Backup DB + entire site
 
-If no scope is provided, default = site.
+If no scope is provided, default = full.
 
 Restore Priority:
   When restoring, the search order is: ID > (scope + name) > name > scope > latest
@@ -188,7 +186,7 @@ Usage: ddev wp-backup list [scope]
 List all backups for this project, optionally filtered by scope.
 
 Arguments:
-  scope    Filter by scope (db, plugins, themes, wp-content, uploads, site, full)
+  scope    Filter by scope (db, plugins, themes, extensions, full)
 
 Examples:
   ddev wp-backup list            # List all backups
@@ -207,7 +205,7 @@ Options:
   -i, --id ID        Restore specific backup by ID
 
 Arguments:
-  scope              Filter by scope (db, plugins, themes, wp-content, uploads, site, full)
+  scope              Filter by scope (db, plugins, themes, extensions, full)
 
 Restore Priority:
   ID > (scope + name) > name > scope > latest
@@ -270,17 +268,14 @@ build_tar_command() {
             INCLUDE=("wp-content/themes")
             EXCLUDE=()
             ;;
-        wp-content)
-            INCLUDE=("wp-content")
-            EXCLUDE=("wp-content/uploads" "wp-content/uploads/*")
-            ;;
-        uploads)
-            INCLUDE=("wp-content/uploads")
+        extensions)
+            # Plugins, themes, mu-plugins, and drop-in plugins (*.php in wp-content root)
+            INCLUDE=("wp-content/plugins" "wp-content/themes" "wp-content/mu-plugins")
             EXCLUDE=()
-            ;;
-        site)
-            INCLUDE=(".")
-            EXCLUDE=(".ddev" ".ddev/*" "wp-content/uploads" "wp-content/uploads/*")
+            # Add drop-in PHP files if they exist
+            for dropfile in "${PROJECT_ROOT}"/wp-content/*.php; do
+                [ -e "$dropfile" ] && INCLUDE+=("wp-content/$(basename "$dropfile")")
+            done
             ;;
         full)
             INCLUDE=(".")
@@ -595,49 +590,15 @@ restore_backup() {
             [[ "$yn" == "y" ]] || exit 0
             rm -rf "${PROJECT_ROOT}/wp-content/themes"
             ;;
-        wp-content)
-            echo -e "${YELLOW}This will delete this project's wp-content (excluding uploads) & restore from backup${RESET}"
+        extensions)
+            echo -e "${YELLOW}This will delete this project's plugins, themes, mu-plugins & drop-ins & restore from backup${RESET}"
             read -rp "Continue? [y/N] " yn
             [[ "$yn" == "y" ]] || exit 0
-            # Save uploads if it exists
-            if [ -d "${PROJECT_ROOT}/wp-content/uploads" ]; then
-                mv "${PROJECT_ROOT}/wp-content/uploads" "${PROJECT_ROOT}/uploads-temp"
-            fi
-            rm -rf "${PROJECT_ROOT}/wp-content"
-            # Restore uploads
-            if [ -d "${PROJECT_ROOT}/uploads-temp" ]; then
-                mkdir -p "${PROJECT_ROOT}/wp-content"
-                mv "${PROJECT_ROOT}/uploads-temp" "${PROJECT_ROOT}/wp-content/uploads"
-            fi
-            ;;
-        uploads)
-            echo -e "${YELLOW}This will delete this project's wp-content/uploads & restore from backup${RESET}"
-            read -rp "Continue? [y/N] " yn
-            [[ "$yn" == "y" ]] || exit 0
-            rm -rf "${PROJECT_ROOT}/wp-content/uploads"
-            ;;
-        site)
-            echo -e "${YELLOW}This will delete ALL project files except .ddev and wp-content/uploads & restore from backup${RESET}"
-            read -rp "Continue? [y/N] " yn
-            [[ "$yn" == "y" ]] || exit 0
-            # Save uploads if it exists
-            if [ -d "${PROJECT_ROOT}/wp-content/uploads" ]; then
-                mv "${PROJECT_ROOT}/wp-content/uploads" "${PROJECT_ROOT}/uploads-temp"
-            fi
-            # Delete project files except .ddev
-            shopt -s dotglob nullglob
-            for path in "${PROJECT_ROOT}"/*; do
-                [ -e "$path" ] || continue
-                if [[ "$(basename "$path")" == ".ddev" ]]; then
-                    continue
-                fi
-                rm -rf "$path"
-            done
-            # Restore uploads
-            if [ -d "${PROJECT_ROOT}/uploads-temp" ]; then
-                mkdir -p "${PROJECT_ROOT}/wp-content"
-                mv "${PROJECT_ROOT}/uploads-temp" "${PROJECT_ROOT}/wp-content/uploads"
-            fi
+            rm -rf "${PROJECT_ROOT}/wp-content/plugins"
+            rm -rf "${PROJECT_ROOT}/wp-content/themes"
+            rm -rf "${PROJECT_ROOT}/wp-content/mu-plugins"
+            # Remove drop-in PHP files
+            rm -f "${PROJECT_ROOT}"/wp-content/*.php
             ;;
         full)
             echo -e "${YELLOW}This will delete ALL project files except .ddev & restore from backup${RESET}"
@@ -935,13 +896,13 @@ shift || true
 
 case "$COMMAND" in
     "" )
-        create_backup "site" "$(sanitize_name "")"
+        create_backup "full" "$(sanitize_name "")"
         ;;
     -h|--help )
         show_help
         ;;
     -n|--name )
-        # Handle case where -n/--name is first argument (default to site scope)
+        # Handle case where -n/--name is first argument (default to full scope)
         NAME=""
         name_parts=""
         while [[ $# -gt 0 && ! "$1" =~ ^-- && ! "$1" =~ ^-[a-z] ]]; do
@@ -949,7 +910,7 @@ case "$COMMAND" in
             shift
         done
         NAME="$(sanitize_name "$name_parts")"
-        create_backup "site" "$NAME"
+        create_backup "full" "$NAME"
         ;;
     list )
         if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -1023,7 +984,7 @@ case "$COMMAND" in
         fi
         rebuild_index_from_files
         ;;
-    db|plugins|themes|wp-content|uploads|site|full )
+    db|plugins|themes|extensions|full )
         NAME=""
         while [[ $# -gt 0 ]]; do
             case "$1" in

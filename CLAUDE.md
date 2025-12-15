@@ -10,14 +10,12 @@ This is a DDEV custom commands repository. The primary command is `wp-backup`, a
 
 ### Core Concepts
 
-**Scope System**: Seven backup scopes that determine what gets backed up:
+**Scope System**: Five backup scopes that determine what gets backed up:
 - `db`: Database only (no files)
 - `plugins`: DB + wp-content/plugins
 - `themes`: DB + wp-content/themes
-- `wp-content`: DB + wp-content (excluding uploads)
-- `uploads`: DB + wp-content/uploads
-- `site`: DB + entire site (excluding uploads) - **default scope**
-- `full`: DB + entire site (including uploads)
+- `extensions`: DB + plugins, themes, mu-plugins & drop-in PHP files
+- `full`: DB + entire site - **default scope**
 
 **Backup Components**: Each backup typically consists of two files:
 - `{id}-files.tar.gz`: Filesystem backup (not created for `db` scope)
@@ -53,7 +51,6 @@ This is a DDEV custom commands repository. The primary command is `wp-backup`, a
 - **Priority Order**: ID > (scope + name) > name > scope > latest
 - Multiple backups can share the same name; restore uses most recent
 - Scope-aware deletion with user confirmation
-- Special handling for wp-content scope (preserves uploads during restore)
 
 **List Backups** (`list_backups`):
 - Auto-cleans stale index entries (missing files)
@@ -101,13 +98,11 @@ else
 fi
 ```
 
-Scope-aware deletion during restore (lines 580-656):
+Scope-aware deletion during restore (lines 574-617):
 - `db`: No file deletion (database only)
 - `plugins`: Deletes wp-content/plugins
 - `themes`: Deletes wp-content/themes
-- `wp-content`: Deletes wp-content but preserves uploads (moved temporarily)
-- `uploads`: Deletes wp-content/uploads
-- `site`: Deletes all files except .ddev and preserves wp-content/uploads
+- `extensions`: Deletes plugins, themes, mu-plugins & drop-in PHP files
 - `full`: Deletes all files except .ddev
 
 ### Dependencies
@@ -131,13 +126,13 @@ INDEX_FILE="${BACKUP_DIR}/index.json"      # Metadata index
 
 **When modifying backup scopes**:
 1. Update `valid_scopes` array (line 106)
-2. Add case to `build_tar_command` (lines 257-294)
-3. Add case to scope-aware deletion in `restore_backup` (lines 580-656)
-4. Update help text in `show_help` (lines 137-144)
-5. Update argument parser to include new scope (line 1026)
+2. Add case to `build_tar_command` (lines 255-289)
+3. Add case to scope-aware deletion in `restore_backup` (lines 574-617)
+4. Update help text in `show_help` (lines 137-142)
+5. Update argument parser to include new scope (line 987)
 
 **When adding new operations**:
-- Add case to main argument parser (lines 936-1051)
+- Add case to main argument parser (lines 897-1012)
 - Follow pattern of existing operations for consistency
 - Always validate scope with `is_valid_scope` before use
 
@@ -146,9 +141,9 @@ INDEX_FILE="${BACKUP_DIR}/index.json"      # Metadata index
 1. **Empty Names**: Uses `-` as placeholder to avoid parsing issues in tab-delimited output
 2. **Duplicate Names**: Multiple backups can share the same name; ID uniquely identifies each
 3. **Stale Index**: `list_backups` auto-cleans entries where files are missing
-4. **wp-content Restore**: Special logic to preserve uploads when restoring wp-content scope
-5. **User Confirmation**: All destructive operations (restore, cleanup) require explicit confirmation
-6. **DB-Only Backups**: The `db` scope creates only a database dump (no files tar), useful for quick database snapshots
+4. **User Confirmation**: All destructive operations (restore, cleanup) require explicit confirmation
+5. **DB-Only Backups**: The `db` scope creates only a database dump (no files tar), useful for quick database snapshots
+6. **Extensions Scope**: Dynamically includes drop-in PHP files from wp-content root at backup time
 
 ### Testing Changes
 
@@ -158,6 +153,7 @@ When modifying wp-backup:
 # Test backup creation
 ddev wp-backup plugins -n test_backup
 ddev wp-backup db -n test_db
+ddev wp-backup extensions -n test_ext
 
 # Verify index
 cat .ddev/backups/index.json | jq
@@ -165,11 +161,12 @@ cat .ddev/backups/index.json | jq
 # Test listing
 ddev wp-backup list
 ddev wp-backup list plugins
-ddev wp-backup list db
+ddev wp-backup list extensions
 
 # Test restore (use test environment!)
 ddev wp-backup restore plugins -n test_backup
 ddev wp-backup restore db -n test_db
+ddev wp-backup restore extensions -n test_ext
 
 # Test cleanup
 ddev wp-backup cleanup test_backup

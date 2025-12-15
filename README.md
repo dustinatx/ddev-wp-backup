@@ -23,7 +23,7 @@ A comprehensive backup and restore system for WordPress sites running in DDEV. C
 ## Quick Start
 
 ```bash
-# Create a backup of your entire site (excluding uploads)
+# Create a backup of your entire site
 ddev wp-backup
 
 # Create a named backup before updating plugins
@@ -41,21 +41,19 @@ ddev wp-backup restore -n before_update
 
 ## Understanding Scopes
 
-Scopes determine what gets backed up. Most scopes include the database plus specified files:
+Scopes determine what gets backed up. All scopes include the database plus specified files:
 
 | Scope | Database | Files Included |
 |-------|----------|----------------|
 | `db` | ✓ | None (database only) |
 | `plugins` | ✓ | wp-content/plugins |
 | `themes` | ✓ | wp-content/themes |
-| `wp-content` | ✓ | wp-content (excluding uploads) |
-| `uploads` | ✓ | wp-content/uploads |
-| `site` | ✓ | Entire site (excluding uploads) **[DEFAULT]** |
-| `full` | ✓ | Entire site (including uploads) |
-
-**Why exclude uploads?** Media files are often large and change infrequently. The `site` scope is faster and sufficient for most development needs. Use `full` when you need everything.
+| `extensions` | ✓ | plugins, themes, mu-plugins & drop-ins |
+| `full` | ✓ | Entire site **[DEFAULT]** |
 
 **When to use `db` scope?** Perfect for quick database snapshots when you only need to preserve data, not files. Much faster than other scopes.
+
+**When to use `extensions` scope?** Great for backing up all WordPress extensions (plugins, themes, mu-plugins, and drop-in files like `object-cache.php`) without including uploads or other site files.
 
 ## Creating Backups
 
@@ -63,7 +61,7 @@ Scopes determine what gets backed up. Most scopes include the database plus spec
 ```bash
 ddev wp-backup
 ```
-Creates a backup of your database and entire site (excluding uploads).
+Creates a backup of your database and entire site.
 
 ### Scope-Specific Backups
 ```bash
@@ -76,8 +74,8 @@ ddev wp-backup plugins
 # Before changing themes
 ddev wp-backup themes
 
-# Full site backup including media
-ddev wp-backup full
+# All extensions (plugins, themes, mu-plugins, drop-ins)
+ddev wp-backup extensions
 ```
 
 ### Named Backups
@@ -110,8 +108,8 @@ Available Backups:
 SCOPE         NAME                            SIZE      CREATED
 ────────────  ──────────────────────────────  ────────  ────────────────────
 plugins       before_update                   45MB      2025-12-07 09:18:55
-site          -                               120MB     2025-12-07 08:30:12
-full          pre_migration                   850MB     2025-12-06 15:22:03
+full          -                               120MB     2025-12-07 08:30:12
+extensions    pre_migration                   85MB      2025-12-06 15:22:03
 ```
 
 **Note:** The `-` in the NAME column indicates an unnamed backup.
@@ -164,15 +162,13 @@ ddev wp-backup restore -i plugins-20251207-091855-before_update
 
 The restore process **deletes files** based on scope before extracting the backup:
 
-| Scope | What Gets Deleted | Special Handling |
-|-------|------------------|------------------|
-| `db` | Nothing | Database only, no file changes |
-| `plugins` | wp-content/plugins | None |
-| `themes` | wp-content/themes | None |
-| `wp-content` | wp-content/* | **Uploads are preserved** |
-| `uploads` | wp-content/uploads | None |
-| `site` | Everything except .ddev | **Uploads are preserved** |
-| `full` | Everything except .ddev | None |
+| Scope | What Gets Deleted |
+|-------|------------------|
+| `db` | Nothing (database only) |
+| `plugins` | wp-content/plugins |
+| `themes` | wp-content/themes |
+| `extensions` | plugins, themes, mu-plugins & drop-in PHP files |
+| `full` | Everything except .ddev |
 
 **You will be prompted to confirm** before any files are deleted.
 
@@ -293,7 +289,7 @@ ddev wp-backup restore full -n before_redesign
 
 ### Regular Development Snapshots
 ```bash
-# Quick site backup (default, excludes uploads)
+# Full site backup (default)
 ddev wp-backup -n working_state
 
 # Later, if you need to reset:
@@ -331,8 +327,8 @@ All backups are stored in your project's `.ddev/backups/` directory:
 ├── index.json                                    # Metadata tracking
 ├── plugins-20251207-091855-before_update-files.tar.gz
 ├── plugins-20251207-091855-before_update-db.sql.gz
-├── site-20251207-083012--files.tar.gz           # Unnamed backup
-└── site-20251207-083012--db.sql.gz
+├── full-20251207-083012--files.tar.gz           # Unnamed backup
+└── full-20251207-083012--db.sql.gz
 ```
 
 Each backup consists of:
