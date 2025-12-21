@@ -28,7 +28,7 @@ RESET="\033[0m"
 # ----------------------------------------------------------
 # Paths
 # ----------------------------------------------------------
-PROJECT_ROOT="$(pwd)"
+PROJECT_ROOT="${DDEV_APPROOT:-.}"
 BACKUP_DIR="${PROJECT_ROOT}/.ddev/backups"
 INDEX_FILE="${BACKUP_DIR}/index.json"
 
