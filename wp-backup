@@ -54,10 +54,10 @@ fi
 # ----------------------------------------------------------
 # Check for pigz (optional, for parallel compression)
 # ----------------------------------------------------------
-GZIP_CMD="gzip"
+GZIP_CMD="gzip -1"
 HAS_PIGZ=false
 if command -v pigz >/dev/null 2>&1; then
-    GZIP_CMD="pigz"
+    GZIP_CMD="pigz -1"
     HAS_PIGZ=true
 fi
 
@@ -297,13 +297,10 @@ verify_backup_files() {
     local scope="$3"
     local all_ok=true
 
-    # Test tar.gz integrity (skip for db-only scope)
+    # Test tar.gz integrity in a single pass (skip for db-only scope)
     if [ "$scope" != "db" ]; then
-        if ! gzip -t "${BACKUP_DIR}/${files_tar}" 2>/dev/null; then
-            echo -e "${RED}✗ Filesystem backup failed gzip integrity test${RESET}"
-            all_ok=false
-        elif ! tar -tzf "${BACKUP_DIR}/${files_tar}" >/dev/null 2>&1; then
-            echo -e "${RED}✗ Filesystem backup failed tar integrity test${RESET}"
+        if ! $GZIP_CMD -dc "${BACKUP_DIR}/${files_tar}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+            echo -e "${RED}✗ Filesystem backup failed integrity test${RESET}"
             all_ok=false
         fi
 
@@ -315,7 +312,7 @@ verify_backup_files() {
     fi
 
     # Test db.sql.gz integrity
-    if ! gzip -t "${BACKUP_DIR}/${db_dump}" 2>/dev/null; then
+    if ! $GZIP_CMD -t "${BACKUP_DIR}/${db_dump}" 2>/dev/null; then
         echo -e "${RED}✗ Database backup failed gzip integrity test${RESET}"
         all_ok=false
     fi
@@ -378,6 +375,11 @@ create_backup() {
 
     build_tar_command "$scope"
 
+    # Start DB backup in background (runs in parallel with filesystem backup)
+    local db_pid=""
+    ddev export-db --gzip -f "${BACKUP_DIR}/${db_dump}" &
+    db_pid=$!
+
     # Create FS backup (skip for db-only scope)
     if [ "$scope" != "db" ]; then
         # Build tar excludes
@@ -402,16 +404,12 @@ create_backup() {
         fi
     fi
 
-    # Create DB backup
+    # Wait for DB backup to complete
     echo -e "${GREEN}✔ Database backup...${RESET}"
-    if [ "$HAS_PV" = true ]; then
-        # Export to temp file, then pipe through pv while compressing
-        local temp_sql="${BACKUP_DIR}/${db_dump}.tmp"
-        ddev export-db --gzip=false -f "${temp_sql}" >/dev/null 2>&1
-        pv -Wrab "${temp_sql}" | $GZIP_CMD > "${BACKUP_DIR}/${db_dump}"
-        rm -f "${temp_sql}"
-    else
-        ddev export-db --gzip -f "${BACKUP_DIR}/${db_dump}"
+    if ! wait "$db_pid"; then
+        echo -e "${RED}✗ Database backup failed${RESET}"
+        rm -f "${BACKUP_DIR}/${files_tar}" "${BACKUP_DIR}/${db_dump}"
+        exit 1
     fi
 
     # Verify backup integrity
@@ -616,21 +614,29 @@ restore_backup() {
             ;;
     esac
 
+    # Start DB import in background (runs in parallel with file extraction)
+    local db_pid=""
+    ddev import-db --file="${BACKUP_DIR}/${db}" &
+    db_pid=$!
+
     # Extract files (skip for db-only scope)
     if [ "$backup_scope" != "db" ]; then
         if [ "$HAS_PV" = true ]; then
             echo -e "${GREEN}✔ Extracting files (with progress)...${RESET}"
             # pv can automatically detect file size when reading from a file
-            pv "${BACKUP_DIR}/${files}" | tar -xzf - -C "${PROJECT_ROOT}"
+            pv "${BACKUP_DIR}/${files}" | $GZIP_CMD -dc | tar -xf - -C "${PROJECT_ROOT}"
         else
             echo -e "${GREEN}✔ Extracting files...${RESET}"
-            tar -xzf "${BACKUP_DIR}/${files}" -C "${PROJECT_ROOT}"
+            $GZIP_CMD -dc "${BACKUP_DIR}/${files}" | tar -xf - -C "${PROJECT_ROOT}"
         fi
     fi
 
-    # Import DB
+    # Wait for DB import to complete
     echo -e "${GREEN}✔ Importing database...${RESET}"
-    ddev import-db --file="${BACKUP_DIR}/${db}"
+    if ! wait "$db_pid"; then
+        echo -e "${RED}✗ Database import failed${RESET}"
+        exit 1
+    fi
 
     echo -e "${GREEN}✔ Restore complete:${RESET} $id"
     echo -e "  To see all backups, run: ${BOLD}ddev wp-backup list${RESET}"
